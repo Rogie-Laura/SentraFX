@@ -10,23 +10,67 @@ import {
   playAlertSound,
   requestNotificationPermission,
 } from "@/modules/notifications";
-import type { Signal } from "@/types";
-import { useEffect, useRef } from "react";
+import type { Signal, Timeframe } from "@/types";
+import { useEffect, useRef, useState } from "react";
+
+const SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD"] as const;
+const TIMEFRAMES: Timeframe[] = ["M1", "M5", "M15", "H1", "H4"];
+
+function formatSymbol(symbol: string): string {
+  return symbol.length === 6 ? `${symbol.slice(0, 3)}/${symbol.slice(3)}` : symbol;
+}
 
 export default function DashboardPage() {
   const queryClient = useQueryClient();
   const prevScoreRef = useRef<number>(0);
+  const [symbol, setSymbol] = useState<string>("EURUSD");
+  const [timeframe, setTimeframe] = useState<Timeframe>("M5");
+  const [initialized, setInitialized] = useState(false);
 
-  // Single API call for all dashboard data
+  // Seed the selected pair from saved settings once on first load
+  useEffect(() => {
+    if (initialized) return;
+    fetch("/api/settings")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.trading?.selectedSymbol) {
+          setSymbol(data.trading.selectedSymbol);
+        }
+        setInitialized(true);
+      })
+      .catch(() => setInitialized(true));
+  }, [initialized]);
+
   const { data, isLoading } = useQuery({
-    queryKey: ["dashboard"],
+    queryKey: ["dashboard", symbol, timeframe],
     queryFn: async () => {
-      const res = await fetch("/api/dashboard");
+      const res = await fetch(
+        `/api/dashboard?symbol=${symbol}&timeframe=${timeframe}`
+      );
       if (!res.ok) throw new Error("Dashboard fetch failed");
       return res.json();
     },
+    enabled: initialized,
     refetchInterval: 5000,
     staleTime: 4000,
+  });
+
+  const changePairMutation = useMutation({
+    mutationFn: async (newSymbol: string) => {
+      await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          section: "trading",
+          data: { selectedSymbol: newSymbol },
+        }),
+      });
+      return newSymbol;
+    },
+    onSuccess: (newSymbol) => {
+      setSymbol(newSymbol);
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
   });
 
   useEffect(() => {
@@ -87,8 +131,9 @@ export default function DashboardPage() {
   const candles = data?.candles ?? [];
   const timeframeAnalysis = data?.timeframeAnalysis ?? [];
   const session = data?.session;
+  const hasOpenPosition = !!position;
 
-  if (isLoading) {
+  if (isLoading || !initialized) {
     return (
       <AppShell>
         <div className="flex h-64 items-center justify-center">
@@ -103,14 +148,51 @@ export default function DashboardPage() {
 
   return (
     <AppShell>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold">Dashboard</h1>
           <p className="text-sm text-[#6b7a8f]">
-            {quote?.symbol ?? "EURUSD"} · Paper Trading
+            {formatSymbol(symbol)} · Paper Trading
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Pair selector — single-pair policy: switching replaces the monitored pair */}
+          <select
+            value={symbol}
+            disabled={hasOpenPosition || changePairMutation.isPending}
+            onChange={(e) => changePairMutation.mutate(e.target.value)}
+            title={
+              hasOpenPosition
+                ? "Close the open position before switching pairs"
+                : "Select currency pair"
+            }
+            className="rounded-full border border-[#1e2836] bg-[#121820] px-3 py-1 text-xs font-medium outline-none focus:border-[#00d4aa] disabled:opacity-50"
+          >
+            {SYMBOLS.map((s) => (
+              <option key={s} value={s}>
+                {formatSymbol(s)}
+              </option>
+            ))}
+          </select>
+
+          {/* Timeframe selector — chart display only, does not change signal engine inputs */}
+          <div className="flex overflow-hidden rounded-full border border-[#1e2836]">
+            {TIMEFRAMES.map((tf) => (
+              <button
+                key={tf}
+                onClick={() => setTimeframe(tf)}
+                className={`px-3 py-1 text-xs font-medium transition-colors ${
+                  timeframe === tf
+                    ? "bg-[#00d4aa] text-black"
+                    : "bg-[#121820] text-[#6b7a8f] hover:text-white"
+                }`}
+              >
+                {tf}
+              </button>
+            ))}
+          </div>
+
           <span className="badge-paper rounded-full px-3 py-1 text-xs font-medium">
             PAPER
           </span>
@@ -124,6 +206,12 @@ export default function DashboardPage() {
           )}
         </div>
       </div>
+
+      {hasOpenPosition && (
+        <div className="mb-4 rounded-lg border border-[#ffa50240] bg-[#ffa50210] px-3 py-2 text-xs text-[#ffa502]">
+          Pair switching disabled — close the open {formatSymbol(symbol)} position first (single-position policy).
+        </div>
+      )}
 
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
         <MetricCard
@@ -151,7 +239,16 @@ export default function DashboardPage() {
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
-          {candles.length > 0 && <CandleChart candles={candles} />}
+          {candles.length > 0 && (
+            <div>
+              <div className="mb-2 flex items-center justify-between px-1">
+                <p className="text-xs text-[#6b7a8f]">
+                  {formatSymbol(symbol)} · {timeframe} chart
+                </p>
+              </div>
+              <CandleChart candles={candles} />
+            </div>
+          )}
 
           <SignalCard
             signal={signal}

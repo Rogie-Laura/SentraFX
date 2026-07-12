@@ -42,3 +42,10 @@ export const SUPPORTED_SYMBOLS = [
 ] as const;
 
 export const SCALPING_TIMEFRAMES: Timeframe[] = ["H1", "M15", "M5", "M1"];
+
+export const ALL_TIMEFRAMES: Timeframe[] = ["M1", "M5", "M15", "H1", "H4"];
+
+export function formatSymbol(symbol: string): string {
+  if (symbol.length !== 6) return symbol;
+  return `${symbol.slice(0, 3)}/${symbol.slice(3)}`;
+}
