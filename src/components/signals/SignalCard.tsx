@@ -7,6 +7,7 @@ interface SignalCardProps {
   onPlaceOrder?: () => void;
   onDismiss?: () => void;
   loading?: boolean;
+  hideActions?: boolean;
 }
 
 function formatPrice(price: number, symbol: string): string {
@@ -27,6 +28,7 @@ export function SignalCard({
   onPlaceOrder,
   onDismiss,
   loading,
+  hideActions,
 }: SignalCardProps) {
   if (!signal) {
     return (
@@ -113,7 +115,7 @@ export function SignalCard({
         </div>
       )}
 
-      {isActionable && (
+      {isActionable && !hideActions && (
         <div className="flex gap-2 border-t border-[#1e2836] p-4">
           <button
             onClick={onPlaceOrder}

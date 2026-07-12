@@ -237,13 +237,39 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* At-a-glance AI summary — beginner-friendly, no timeframe decisions required */}
+      {/* At-a-glance AI summary with Place Order right beside it — no scrolling needed */}
       <div className="mb-4">
         <AnalysisSummary
           signal={signal}
           trendLabel={signal?.higherTimeframeTrend ?? "—"}
+          onPlaceOrder={() => placeOrderMutation.mutate()}
+          onDismiss={() => dismissMutation.mutate()}
+          loading={placeOrderMutation.isPending}
         />
       </div>
+
+      {placeOrderMutation.data && !placeOrderMutation.data.success && (
+        <div className="mb-4 card border border-[#ff475740] p-4">
+          <p className="text-sm font-medium text-[#ff4757]">
+            ORDER NOT PLACED
+          </p>
+          <ul className="mt-2 space-y-1">
+            {placeOrderMutation.data.errors?.map((err: string) => (
+              <li key={err} className="text-xs text-[#ff4757]">
+                · {err}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {placeOrderMutation.data?.success && (
+        <div className="mb-4 card border border-[#00d4aa40] p-4">
+          <p className="text-sm font-medium text-[#00d4aa]">
+            Order placed successfully (paper)
+          </p>
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
@@ -261,30 +287,8 @@ export default function DashboardPage() {
             onPlaceOrder={() => placeOrderMutation.mutate()}
             onDismiss={() => dismissMutation.mutate()}
             loading={placeOrderMutation.isPending}
+            hideActions
           />
-
-          {placeOrderMutation.data && !placeOrderMutation.data.success && (
-            <div className="card border border-[#ff475740] p-4">
-              <p className="text-sm font-medium text-[#ff4757]">
-                ORDER NOT PLACED
-              </p>
-              <ul className="mt-2 space-y-1">
-                {placeOrderMutation.data.errors?.map((err: string) => (
-                  <li key={err} className="text-xs text-[#ff4757]">
-                    · {err}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {placeOrderMutation.data?.success && (
-            <div className="card border border-[#00d4aa40] p-4">
-              <p className="text-sm font-medium text-[#00d4aa]">
-                Order placed successfully (paper)
-              </p>
-            </div>
-          )}
         </div>
 
         <div className="space-y-4">
