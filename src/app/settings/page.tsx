@@ -2,7 +2,19 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import {
+  TRADING_STYLE_PROFILES,
+  TRADING_STYLE_DESCRIPTIONS,
+} from "@/modules/signal-engine";
+import { ALL_TIMEFRAMES } from "@/modules/market-data";
+import type { Timeframe, TimeframeProfile, TradingStyle } from "@/types";
+
+const STYLE_OPTIONS: Exclude<TradingStyle, "custom">[] = [
+  "conservative",
+  "balanced",
+  "aggressive",
+];
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
@@ -17,6 +29,22 @@ export default function SettingsPage() {
   const [symbol, setSymbol] = useState("EURUSD");
   const [manualThreshold, setManualThreshold] = useState(60);
   const [riskPercent, setRiskPercent] = useState(1);
+
+  const [tradingStyle, setTradingStyle] = useState<TradingStyle>("balanced");
+  const [customProfile, setCustomProfile] = useState<TimeframeProfile>(
+    TRADING_STYLE_PROFILES.balanced
+  );
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [initializedStrategy, setInitializedStrategy] = useState(false);
+
+  useEffect(() => {
+    if (initializedStrategy || !data?.trading) return;
+    if (data.trading.tradingStyle) setTradingStyle(data.trading.tradingStyle);
+    if (data.trading.customTimeframeProfile)
+      setCustomProfile(data.trading.customTimeframeProfile);
+    setShowAdvanced(data.trading.tradingStyle === "custom");
+    setInitializedStrategy(true);
+  }, [data, initializedStrategy]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -39,6 +67,27 @@ export default function SettingsPage() {
     },
   });
 
+  const saveStrategyMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          section: "strategy",
+          data: {
+            tradingStyle,
+            customTimeframeProfile: customProfile,
+          },
+        }),
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+
   const brokerMutation = useMutation({
     mutationFn: async (action: string) => {
       const res = await fetch("/api/broker", {
@@ -54,12 +103,113 @@ export default function SettingsPage() {
   });
 
   const settings = data?.trading;
+  const activeProfile =
+    tradingStyle === "custom" ? customProfile : TRADING_STYLE_PROFILES[tradingStyle];
+
+  function selectStyle(style: Exclude<TradingStyle, "custom">) {
+    setTradingStyle(style);
+    setCustomProfile(TRADING_STYLE_PROFILES[style]);
+    setShowAdvanced(false);
+  }
+
+  function updateCustomTf(role: keyof TimeframeProfile, value: Timeframe) {
+    setTradingStyle("custom");
+    setCustomProfile((prev) => ({ ...prev, [role]: value }));
+  }
 
   return (
     <AppShell>
       <h1 className="mb-4 text-xl font-bold">Settings</h1>
 
       <div className="grid gap-4 lg:grid-cols-2">
+        <section className="card p-4 lg:col-span-2">
+          <h2 className="mb-1 text-sm font-medium">AI Trading Style</h2>
+          <p className="mb-3 text-xs text-[#6b7a8f]">
+            Piliin kung gaano proactive ang AI. Ito ang nagde-decide ng
+            timeframe cascade — hindi mo na kailangang piliin ang mga ito
+            nang manwal.
+          </p>
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            {STYLE_OPTIONS.map((style) => {
+              const desc = TRADING_STYLE_DESCRIPTIONS[style];
+              const isActive = tradingStyle === style;
+              return (
+                <button
+                  key={style}
+                  onClick={() => selectStyle(style)}
+                  className={`rounded-lg border p-3 text-left transition-colors ${
+                    isActive
+                      ? "border-[#00d4aa] bg-[#00d4aa10]"
+                      : "border-[#1e2836] hover:border-[#2a3746]"
+                  }`}
+                >
+                  <div className="mb-1 flex items-center justify-between">
+                    <span
+                      className={`text-sm font-bold ${isActive ? "text-[#00d4aa]" : ""}`}
+                    >
+                      {desc.label}
+                    </span>
+                    {isActive && (
+                      <span className="text-[10px] text-[#00d4aa]">ACTIVE</span>
+                    )}
+                  </div>
+                  <p className="mb-2 text-[11px] text-[#6b7a8f]">
+                    {desc.tagline}
+                  </p>
+                  <p className="text-[10px] text-[#6b7a8f]">{desc.detail}</p>
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            onClick={() => setShowAdvanced((v) => !v)}
+            className="mt-3 text-xs text-[#6b7a8f] hover:text-[#00d4aa]"
+          >
+            {showAdvanced ? "▾" : "▸"} Advanced Settings (custom timeframes)
+          </button>
+
+          {showAdvanced && (
+            <div className="mt-3 grid gap-3 rounded-lg border border-[#1e2836] p-3 sm:grid-cols-4">
+              <TfSelect
+                label="Trend TF"
+                value={activeProfile.trend}
+                onChange={(v) => updateCustomTf("trend", v)}
+              />
+              <TfSelect
+                label="Confirmation TF"
+                value={activeProfile.confirmation}
+                onChange={(v) => updateCustomTf("confirmation", v)}
+              />
+              <TfSelect
+                label="Signal TF"
+                value={activeProfile.signal}
+                onChange={(v) => updateCustomTf("signal", v)}
+              />
+              <TfSelect
+                label="Entry TF"
+                value={activeProfile.entry}
+                onChange={(v) => updateCustomTf("entry", v)}
+              />
+              <p className="col-span-full text-[10px] text-[#6b7a8f]">
+                Kung beginner ka, hindi mo na kailangang galawin ito — gamitin
+                lang ang isa sa tatlong presets sa itaas.
+              </p>
+            </div>
+          )}
+
+          <button
+            onClick={() => saveStrategyMutation.mutate()}
+            className="mt-3 w-full rounded-lg bg-[#00d4aa] py-2 text-sm font-bold text-black sm:w-auto sm:px-6"
+          >
+            {saveStrategyMutation.isPending ? "Saving..." : "Save AI Trading Style"}
+          </button>
+          {saveStrategyMutation.isSuccess && (
+            <p className="mt-2 text-xs text-[#00d4aa]">Saved.</p>
+          )}
+        </section>
+
         <section className="card p-4">
           <h2 className="mb-3 text-sm font-medium">Broker Integration</h2>
           <div className="mb-3 space-y-1 text-sm">
@@ -185,6 +335,33 @@ export default function SettingsPage() {
         </section>
       </div>
     </AppShell>
+  );
+}
+
+function TfSelect({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: Timeframe;
+  onChange: (v: Timeframe) => void;
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-[10px] text-[#6b7a8f]">{label}</label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as Timeframe)}
+        className="w-full rounded-lg border border-[#1e2836] bg-[#0b0f14] px-2 py-1.5 text-xs"
+      >
+        {ALL_TIMEFRAMES.map((tf) => (
+          <option key={tf} value={tf}>
+            {tf}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }
 

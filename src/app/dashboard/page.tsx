@@ -2,19 +2,27 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
+import Link from "next/link";
 import { AppShell } from "@/components/layout/AppShell";
 import { SignalCard } from "@/components/signals/SignalCard";
+import { AnalysisSummary } from "@/components/signals/AnalysisSummary";
 import { CandleChart } from "@/components/charts/CandleChart";
 import { EmergencyStopButton } from "@/components/trading/EmergencyStopButton";
 import {
   playAlertSound,
   requestNotificationPermission,
 } from "@/modules/notifications";
-import type { Signal, Timeframe } from "@/types";
+import type { Signal, TradingStyle } from "@/types";
 import { useEffect, useRef, useState } from "react";
 
 const SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD"] as const;
-const TIMEFRAMES: Timeframe[] = ["M1", "M5", "M15", "H1", "H4"];
+
+const STYLE_LABELS: Record<TradingStyle, string> = {
+  conservative: "Conservative",
+  balanced: "Balanced",
+  aggressive: "Aggressive",
+  custom: "Custom",
+};
 
 function formatSymbol(symbol: string): string {
   return symbol.length === 6 ? `${symbol.slice(0, 3)}/${symbol.slice(3)}` : symbol;
@@ -24,7 +32,6 @@ export default function DashboardPage() {
   const queryClient = useQueryClient();
   const prevScoreRef = useRef<number>(0);
   const [symbol, setSymbol] = useState<string>("EURUSD");
-  const [timeframe, setTimeframe] = useState<Timeframe>("M5");
   const [initialized, setInitialized] = useState(false);
 
   // Seed the selected pair from saved settings once on first load
@@ -41,12 +48,11 @@ export default function DashboardPage() {
       .catch(() => setInitialized(true));
   }, [initialized]);
 
+  // AI decides the timeframe cascade automatically — no manual timeframe picker
   const { data, isLoading } = useQuery({
-    queryKey: ["dashboard", symbol, timeframe],
+    queryKey: ["dashboard", symbol],
     queryFn: async () => {
-      const res = await fetch(
-        `/api/dashboard?symbol=${symbol}&timeframe=${timeframe}`
-      );
+      const res = await fetch(`/api/dashboard?symbol=${symbol}`);
       if (!res.ok) throw new Error("Dashboard fetch failed");
       return res.json();
     },
@@ -131,6 +137,8 @@ export default function DashboardPage() {
   const candles = data?.candles ?? [];
   const timeframeAnalysis = data?.timeframeAnalysis ?? [];
   const session = data?.session;
+  const tradingStyle: TradingStyle = data?.tradingStyle ?? "balanced";
+  const chartTimeframe = data?.chartTimeframe ?? "M5";
   const hasOpenPosition = !!position;
 
   if (isLoading || !initialized) {
@@ -176,22 +184,14 @@ export default function DashboardPage() {
             ))}
           </select>
 
-          {/* Timeframe selector — chart display only, does not change signal engine inputs */}
-          <div className="flex overflow-hidden rounded-full border border-[#1e2836]">
-            {TIMEFRAMES.map((tf) => (
-              <button
-                key={tf}
-                onClick={() => setTimeframe(tf)}
-                className={`px-3 py-1 text-xs font-medium transition-colors ${
-                  timeframe === tf
-                    ? "bg-[#00d4aa] text-black"
-                    : "bg-[#121820] text-[#6b7a8f] hover:text-white"
-                }`}
-              >
-                {tf}
-              </button>
-            ))}
-          </div>
+          {/* AI decides the timeframe cascade automatically based on the active style */}
+          <Link
+            href="/settings"
+            title="Change AI Trading Style in Settings"
+            className="rounded-full border border-[#00d4aa40] bg-[#00d4aa10] px-3 py-1 text-xs font-medium text-[#00d4aa] hover:bg-[#00d4aa20]"
+          >
+            AI: {STYLE_LABELS[tradingStyle]}
+          </Link>
 
           <span className="badge-paper rounded-full px-3 py-1 text-xs font-medium">
             PAPER
@@ -237,15 +237,21 @@ export default function DashboardPage() {
         />
       </div>
 
+      {/* At-a-glance AI summary — beginner-friendly, no timeframe decisions required */}
+      <div className="mb-4">
+        <AnalysisSummary
+          signal={signal}
+          trendLabel={signal?.higherTimeframeTrend ?? "—"}
+        />
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
           {candles.length > 0 && (
             <div>
-              <div className="mb-2 flex items-center justify-between px-1">
-                <p className="text-xs text-[#6b7a8f]">
-                  {formatSymbol(symbol)} · {timeframe} chart
-                </p>
-              </div>
+              <p className="mb-2 px-1 text-xs text-[#6b7a8f]">
+                {formatSymbol(symbol)} · {chartTimeframe} chart (auto-selected by AI)
+              </p>
               <CandleChart candles={candles} />
             </div>
           )}
@@ -289,20 +295,22 @@ export default function DashboardPage() {
           {timeframeAnalysis.length > 0 && (
             <div className="card p-4">
               <h3 className="mb-3 text-sm font-medium">
-                Multi-Timeframe Trend
+                Multi-Timeframe Cascade
               </h3>
               <div className="space-y-2">
                 {timeframeAnalysis.map(
                   (tf: {
                     timeframe: string;
+                    roles?: string[];
                     indicators: { trend: string; rsi: number };
                   }) => (
                     <div
                       key={tf.timeframe}
                       className="flex items-center justify-between text-sm"
                     >
-                      <span className="w-10 text-[#6b7a8f]">
-                        {tf.timeframe}
+                      <span className="text-[#6b7a8f]">
+                        {tf.roles?.join("/") ?? ""}{" "}
+                        <span className="text-[10px]">({tf.timeframe})</span>
                       </span>
                       <span
                         className={
@@ -315,13 +323,16 @@ export default function DashboardPage() {
                       >
                         {tf.indicators.trend}
                       </span>
-                      <span className="text-xs text-[#6b7a8f]">
-                        RSI {tf.indicators.rsi?.toFixed(0) ?? "—"}
-                      </span>
                     </div>
                   )
                 )}
               </div>
+              <Link
+                href="/settings"
+                className="mt-3 block text-center text-xs text-[#6b7a8f] hover:text-[#00d4aa]"
+              >
+                Customize in Advanced Settings →
+              </Link>
             </div>
           )}
 

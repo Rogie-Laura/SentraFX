@@ -1,5 +1,14 @@
 export type Timeframe = "M1" | "M5" | "M15" | "H1" | "H4";
 
+export type TradingStyle = "conservative" | "balanced" | "aggressive" | "custom";
+
+export interface TimeframeProfile {
+  trend: Timeframe;
+  confirmation: Timeframe;
+  signal: Timeframe;
+  entry: Timeframe;
+}
+
 export type SignalDirection =
   | "STRONG_BUY"
   | "BUY"
@@ -153,6 +162,8 @@ export interface TradingSettings extends RiskSettings {
   automaticThreshold: number;
   allowedSessions: MarketSession[];
   signalExpirationMinutes: number;
+  tradingStyle: TradingStyle;
+  customTimeframeProfile: TimeframeProfile;
 }
 
 export interface PreflightResult {

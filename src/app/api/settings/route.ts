@@ -34,6 +34,16 @@ export async function PUT(request: Request) {
     return NextResponse.json(updated);
   }
 
+  if (section === "strategy") {
+    const updated = updateTradingSettings(body.data);
+    logAuditEvent({
+      eventType: "settings_changed",
+      eventDescription: `Trading style changed to ${body.data.tradingStyle ?? "custom profile"}`,
+      metadata: body.data,
+    });
+    return NextResponse.json(updated);
+  }
+
   if (section === "risk") {
     const updated = updateTradingSettings(body.data);
     if (body.data.autoModeEnabled) {

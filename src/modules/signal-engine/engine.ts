@@ -7,6 +7,7 @@ import type {
   Signal,
   SignalDirection,
   Timeframe,
+  TimeframeProfile,
 } from "@/types";
 import { computeIndicators } from "@/modules/technical-analysis";
 import { getCurrentSession } from "@/modules/market-data";
@@ -21,6 +22,7 @@ interface GenerateSignalInput {
   symbol: string;
   quote: Quote;
   timeframeData: TimeframeAnalysis[];
+  profile: TimeframeProfile;
   allowedSessions: MarketSession[];
   manualThreshold: number;
   spreadLimit: number;
@@ -85,48 +87,59 @@ function computeBuyScore(input: GenerateSignalInput): {
   reasons: string[];
   penalties: string[];
 } {
-  const h1 = input.timeframeData.find((t) => t.timeframe === "H1");
-  const m15 = input.timeframeData.find((t) => t.timeframe === "M15");
-  const m5 = input.timeframeData.find((t) => t.timeframe === "M5");
+  const trendTf = input.timeframeData.find((t) => t.timeframe === input.profile.trend);
+  const confirmationTf = input.timeframeData.find(
+    (t) => t.timeframe === input.profile.confirmation
+  );
+  const signalTf = input.timeframeData.find((t) => t.timeframe === input.profile.signal);
 
   const breakdown: ScoreBreakdown[] = [];
   const reasons: string[] = [];
   const penalties: string[] = [];
   let rawScore = 0;
 
-  if (h1) {
+  if (trendTf) {
     let pts = 0;
-    if (h1.indicators.trend === "bullish") {
+    if (trendTf.indicators.trend === "bullish") {
       pts = 15;
-      reasons.push("H1 EMA trend is bullish");
-    } else if (h1.indicators.trend === "neutral") pts = 7;
-    else penalties.push("H1 trend conflict");
-    breakdown.push(scoreCategory("H1 trend alignment", 15, pts, h1.indicators.trend));
+      reasons.push(`${trendTf.timeframe} EMA trend is bullish`);
+    } else if (trendTf.indicators.trend === "neutral") pts = 7;
+    else penalties.push(`${trendTf.timeframe} trend conflict`);
+    breakdown.push(
+      scoreCategory(`${trendTf.timeframe} trend alignment`, 15, pts, trendTf.indicators.trend)
+    );
     rawScore += pts;
   }
 
-  if (m15) {
+  if (confirmationTf) {
     let pts = 0;
-    if (m15.indicators.structure === "higher_highs") {
+    if (confirmationTf.indicators.structure === "higher_highs") {
       pts = 15;
-      reasons.push("M15 higher-high structure");
-    } else if (m15.indicators.structure === "mixed") pts = 8;
-    breakdown.push(scoreCategory("M15 structure alignment", 15, pts, m15.indicators.structure));
+      reasons.push(`${confirmationTf.timeframe} higher-high structure`);
+    } else if (confirmationTf.indicators.structure === "mixed") pts = 8;
+    breakdown.push(
+      scoreCategory(
+        `${confirmationTf.timeframe} structure alignment`,
+        15,
+        pts,
+        confirmationTf.indicators.structure
+      )
+    );
     rawScore += pts;
   }
 
-  if (m5) {
+  if (signalTf) {
     let pts = 0;
-    const pa = detectPriceAction(m5.candles);
+    const pa = detectPriceAction(signalTf.candles);
     if (pa.bullish) {
       pts = 14;
-      reasons.push(`M5 ${pa.pattern}`);
-    } else if (m5.indicators.trend === "bullish") pts = 10;
-    breakdown.push(scoreCategory("M5 entry setup", 15, pts, pa.pattern));
+      reasons.push(`${signalTf.timeframe} ${pa.pattern}`);
+    } else if (signalTf.indicators.trend === "bullish") pts = 10;
+    breakdown.push(scoreCategory(`${signalTf.timeframe} entry setup`, 15, pts, pa.pattern));
     rawScore += pts;
   }
 
-  const momentumSource = m5 ?? m15;
+  const momentumSource = signalTf ?? confirmationTf;
   if (momentumSource) {
     let pts = 0;
     const ind = momentumSource.indicators;
@@ -140,10 +153,10 @@ function computeBuyScore(input: GenerateSignalInput): {
     rawScore += pts;
   }
 
-  if (m5) {
+  if (signalTf) {
     let pts = 0;
-    const atr = m5.indicators.atr;
-    const price = m5.candles[m5.candles.length - 1].close;
+    const atr = signalTf.indicators.atr;
+    const price = signalTf.candles[signalTf.candles.length - 1].close;
     const atrPct = (atr / price) * 10000;
     if (atrPct > 3 && atrPct < 15) pts = 8;
     else if (atrPct >= 1) pts = 5;
@@ -152,11 +165,11 @@ function computeBuyScore(input: GenerateSignalInput): {
     rawScore += pts;
   }
 
-  if (m5) {
+  if (signalTf) {
     let pts = 0;
-    const price = m5.candles[m5.candles.length - 1].close;
-    const nearSupport = price <= m5.indicators.bbLower * 1.002;
-    const nearMiddle = Math.abs(price - m5.indicators.bbMiddle) / price < 0.001;
+    const price = signalTf.candles[signalTf.candles.length - 1].close;
+    const nearSupport = price <= signalTf.indicators.bbLower * 1.002;
+    const nearMiddle = Math.abs(price - signalTf.indicators.bbMiddle) / price < 0.001;
     if (nearSupport) {
       pts = 9;
       reasons.push("Entry near valid support");
@@ -165,8 +178,8 @@ function computeBuyScore(input: GenerateSignalInput): {
     rawScore += pts;
   }
 
-  if (m5) {
-    const pa = detectPriceAction(m5.candles);
+  if (signalTf) {
+    const pa = detectPriceAction(signalTf.candles);
     let pts = pa.bullish ? 7 : 0;
     if (pa.bullish) reasons.push(`Bullish ${pa.pattern} candle`);
     breakdown.push(scoreCategory("Price-action confirmation", 10, pts, pa.pattern));
@@ -203,16 +216,16 @@ function computeBuyScore(input: GenerateSignalInput): {
   rawScore += newsPts;
 
   let penaltyTotal = 0;
-  if (h1?.indicators.trend === "bearish") penaltyTotal += 12;
+  if (trendTf?.indicators.trend === "bearish") penaltyTotal += 12;
   if (input.quote.spread > input.spreadLimit) penaltyTotal += 8;
-  if (m5) {
-    const price = m5.candles[m5.candles.length - 1].close;
-    if (price >= m5.indicators.bbUpper * 0.998) {
+  if (signalTf) {
+    const price = signalTf.candles[signalTf.candles.length - 1].close;
+    if (price >= signalTf.indicators.bbUpper * 0.998) {
       penaltyTotal += 10;
       penalties.push("Entry near resistance");
     }
   }
-  if ((h1?.indicators.adx ?? 0) < 20) penaltyTotal += 5;
+  if ((trendTf?.indicators.adx ?? 0) < 20) penaltyTotal += 5;
 
   const finalScore = Math.max(0, Math.min(100, rawScore - penaltyTotal));
   return { score: finalScore, breakdown, reasons, penalties };
@@ -295,10 +308,10 @@ export function generateSignal(input: GenerateSignalInput): Signal {
   const isBuy = direction === "BUY" || direction === "STRONG_BUY";
   const active = isBuy ? buy : sell;
   const trustScore = isBuy ? buy.score : sell.score;
-  const m5 = input.timeframeData.find((t) => t.timeframe === "M5");
-  const h1 = input.timeframeData.find((t) => t.timeframe === "H1");
+  const signalTf = input.timeframeData.find((t) => t.timeframe === input.profile.signal);
+  const trendTf = input.timeframeData.find((t) => t.timeframe === input.profile.trend);
   const price = input.quote.mid;
-  const atr = m5?.indicators.atr ?? price * 0.0005;
+  const atr = signalTf?.indicators.atr ?? price * 0.0005;
 
   const stopDistance = atr * 1.5;
   const tpDistance = stopDistance * 2;
@@ -318,7 +331,7 @@ export function generateSignal(input: GenerateSignalInput): Signal {
     id: uuidv4(),
     symbol: input.symbol,
     direction,
-    timeframe: "M5",
+    timeframe: input.profile.signal,
     trustScore,
     entryMin: isBuy ? price - atr * 0.3 : price + atr * 0.3,
     entryMax: isBuy ? price + atr * 0.3 : price - atr * 0.3,
@@ -329,11 +342,11 @@ export function generateSignal(input: GenerateSignalInput): Signal {
     reasons: active.reasons,
     warnings,
     higherTimeframeTrend:
-      h1?.indicators.trend === "bullish"
-        ? "H1 Bullish"
-        : h1?.indicators.trend === "bearish"
-          ? "H1 Bearish"
-          : "H1 Neutral",
+      trendTf?.indicators.trend === "bullish"
+        ? `${input.profile.trend} Bullish`
+        : trendTf?.indicators.trend === "bearish"
+          ? `${input.profile.trend} Bearish`
+          : `${input.profile.trend} Neutral`,
     generatedAt: new Date(),
     expiresAt: new Date(Date.now() + 5 * 60_000),
   };
@@ -342,7 +355,8 @@ export function generateSignal(input: GenerateSignalInput): Signal {
 export async function analyzeMultiTimeframe(
   symbol: string,
   quote: Quote,
-  candlesByTf: Record<Timeframe, Candle[]>,
+  candlesByTf: Partial<Record<Timeframe, Candle[]>>,
+  profile: TimeframeProfile,
   settings: {
     allowedSessions: MarketSession[];
     manualThreshold: number;
@@ -350,20 +364,23 @@ export async function analyzeMultiTimeframe(
     newsBlocked?: boolean;
   }
 ): Promise<Signal> {
-  const timeframeData: TimeframeAnalysis[] = (
-    ["H1", "M15", "M5", "M1"] as Timeframe[]
-  )
+  const uniqueTimeframes = Array.from(
+    new Set([profile.trend, profile.confirmation, profile.signal, profile.entry])
+  );
+
+  const timeframeData: TimeframeAnalysis[] = uniqueTimeframes
     .filter((tf) => candlesByTf[tf]?.length)
     .map((timeframe) => ({
       timeframe,
-      candles: candlesByTf[timeframe],
-      indicators: computeIndicators(candlesByTf[timeframe]),
+      candles: candlesByTf[timeframe]!,
+      indicators: computeIndicators(candlesByTf[timeframe]!),
     }));
 
   return generateSignal({
     symbol,
     quote,
     timeframeData,
+    profile,
     ...settings,
   });
 }

@@ -1,5 +1,8 @@
 import type { Candle, Timeframe } from "@/types";
-import { analyzeMultiTimeframe } from "@/modules/signal-engine";
+import {
+  analyzeMultiTimeframe,
+  TRADING_STYLE_PROFILES,
+} from "@/modules/signal-engine";
 import { getCandles, getQuote } from "@/modules/market-data";
 import { DEFAULT_RISK_SETTINGS } from "@/modules/risk-engine";
 
@@ -41,16 +44,23 @@ export async function runBacktest(config: BacktestConfig): Promise<BacktestResul
 
   const candlesByTf = {
     H1: candles,
+    H4: candles,
     M15: candles,
     M5: candles,
     M1: candles,
   } as Record<Timeframe, Candle[]>;
 
-  const signal = await analyzeMultiTimeframe(config.symbol, quote, candlesByTf, {
-    allowedSessions: ["london", "new_york", "london_ny_overlap"],
-    manualThreshold: config.signalThreshold,
-    spreadLimit: config.spreadModel,
-  });
+  const signal = await analyzeMultiTimeframe(
+    config.symbol,
+    quote,
+    candlesByTf,
+    TRADING_STYLE_PROFILES.balanced,
+    {
+      allowedSessions: ["london", "new_york", "london_ny_overlap"],
+      manualThreshold: config.signalThreshold,
+      spreadLimit: config.spreadModel,
+    }
+  );
 
   const trades: BacktestTrade[] = [];
   let balance = config.initialBalance;

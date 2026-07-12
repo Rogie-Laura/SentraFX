@@ -1,50 +1,75 @@
 import { NextResponse } from "next/server";
 import { getCandles, getQuote, getCurrentSession } from "@/modules/market-data";
-import { analyzeMultiTimeframe } from "@/modules/signal-engine";
+import {
+  analyzeMultiTimeframe,
+  getActiveTimeframeProfile,
+  getUniqueTimeframes,
+} from "@/modules/signal-engine";
 import { computeIndicators } from "@/modules/technical-analysis";
 import { getOpenPaperPosition } from "@/modules/order-engine";
 import { getTradingSettings, isEmergencyStopActive } from "@/lib/settings-store";
-import type { Timeframe } from "@/types";
-
-// Fixed multi-timeframe stack used by the signal/trust-score engine (per scalping spec)
-const SIGNAL_TIMEFRAMES: Timeframe[] = ["H1", "M15", "M5", "M1"];
+import type { Timeframe, TradingStyle } from "@/types";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const settings = getTradingSettings();
 
-  // Client explicitly controls symbol/timeframe — avoids relying on
+  // Client explicitly controls symbol/style — avoids relying on
   // server-side in-memory state that isn't reliable across serverless invocations
   const symbol = searchParams.get("symbol") ?? settings.selectedSymbol;
-  const chartTimeframe = (searchParams.get("timeframe") ?? "M5") as Timeframe;
+  const styleParam = searchParams.get("style") as TradingStyle | null;
 
-  const needsSeparateChartFetch = !SIGNAL_TIMEFRAMES.includes(chartTimeframe);
+  const profile =
+    styleParam && styleParam !== settings.tradingStyle
+      ? getActiveTimeframeProfile({
+          tradingStyle: styleParam,
+          customTimeframeProfile: settings.customTimeframeProfile,
+        })
+      : getActiveTimeframeProfile(settings);
+
+  const requiredTimeframes = getUniqueTimeframes(profile);
+
+  // Optional explicit chart display override; defaults to the profile's Signal TF
+  const chartTimeframe = (searchParams.get("chartTimeframe") ??
+    profile.signal) as Timeframe;
+  const needsSeparateChartFetch = !requiredTimeframes.includes(chartTimeframe);
+
+  const fetchList = needsSeparateChartFetch
+    ? [...requiredTimeframes, chartTimeframe]
+    : requiredTimeframes;
 
   const [quote, ...candleArrays] = await Promise.all([
     getQuote(symbol),
-    ...SIGNAL_TIMEFRAMES.map((tf) => getCandles(symbol, tf, 100)),
-    ...(needsSeparateChartFetch ? [getCandles(symbol, chartTimeframe, 100)] : []),
+    ...fetchList.map((tf) => getCandles(symbol, tf, 100)),
   ]);
 
   const candlesByTf = Object.fromEntries(
-    SIGNAL_TIMEFRAMES.map((tf, i) => [tf, candleArrays[i]])
+    fetchList.map((tf, i) => [tf, candleArrays[i]])
   ) as Record<Timeframe, Awaited<ReturnType<typeof getCandles>>>;
 
-  const chartCandles = needsSeparateChartFetch
-    ? candleArrays[candleArrays.length - 1]
-    : candlesByTf[chartTimeframe];
+  const chartCandles = candlesByTf[chartTimeframe];
 
   const [signal, ...indicatorSets] = await Promise.all([
-    analyzeMultiTimeframe(symbol, quote, candlesByTf, {
+    analyzeMultiTimeframe(symbol, quote, candlesByTf, profile, {
       allowedSessions: settings.allowedSessions,
       manualThreshold: settings.manualThreshold,
       spreadLimit: settings.maximumSpread,
     }),
-    ...SIGNAL_TIMEFRAMES.map((tf) => computeIndicators(candlesByTf[tf])),
+    ...requiredTimeframes.map((tf) => computeIndicators(candlesByTf[tf])),
   ]);
 
-  const timeframeAnalysis = SIGNAL_TIMEFRAMES.map((tf, i) => ({
+  const roleFor = (tf: Timeframe): string[] => {
+    const roles: string[] = [];
+    if (tf === profile.trend) roles.push("Trend");
+    if (tf === profile.confirmation) roles.push("Confirmation");
+    if (tf === profile.signal) roles.push("Signal");
+    if (tf === profile.entry) roles.push("Entry");
+    return roles;
+  };
+
+  const timeframeAnalysis = requiredTimeframes.map((tf, i) => ({
     timeframe: tf,
+    roles: roleFor(tf),
     indicators: indicatorSets[i],
     lastCandle: candlesByTf[tf][candlesByTf[tf].length - 1],
   }));
@@ -54,6 +79,8 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     symbol,
+    profile,
+    tradingStyle: styleParam ?? settings.tradingStyle,
     chartTimeframe,
     quote,
     signal,

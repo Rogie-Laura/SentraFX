@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { getCandles, getQuote } from "@/modules/market-data";
-import { analyzeMultiTimeframe } from "@/modules/signal-engine";
+import {
+  analyzeMultiTimeframe,
+  getActiveTimeframeProfile,
+  getUniqueTimeframes,
+} from "@/modules/signal-engine";
 import { createSignalAlert } from "@/modules/notifications";
 import { getTradingSettings } from "@/lib/settings-store";
 import type { Timeframe } from "@/types";
-
-const TIMEFRAMES: Timeframe[] = ["H1", "M15", "M5", "M1"];
 
 let currentSignal: Awaited<ReturnType<typeof analyzeMultiTimeframe>> | null =
   null;
@@ -14,18 +16,19 @@ const signalHistory: Awaited<ReturnType<typeof analyzeMultiTimeframe>>[] = [];
 async function refreshSignal() {
   const settings = getTradingSettings();
   const symbol = settings.selectedSymbol;
+  const profile = getActiveTimeframeProfile(settings);
+  const timeframes = getUniqueTimeframes(profile);
 
-  // Parallel fetching
   const [quote, ...candleArrays] = await Promise.all([
     getQuote(symbol),
-    ...TIMEFRAMES.map((tf) => getCandles(symbol, tf, 100)),
+    ...timeframes.map((tf) => getCandles(symbol, tf, 100)),
   ]);
 
   const candlesByTf = Object.fromEntries(
-    TIMEFRAMES.map((tf, i) => [tf, candleArrays[i]])
+    timeframes.map((tf, i) => [tf, candleArrays[i]])
   ) as Record<Timeframe, Awaited<ReturnType<typeof getCandles>>>;
 
-  const signal = await analyzeMultiTimeframe(symbol, quote, candlesByTf, {
+  const signal = await analyzeMultiTimeframe(symbol, quote, candlesByTf, profile, {
     allowedSessions: settings.allowedSessions,
     manualThreshold: settings.manualThreshold,
     spreadLimit: settings.maximumSpread,
