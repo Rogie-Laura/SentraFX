@@ -17,59 +17,16 @@ export default function DashboardPage() {
   const queryClient = useQueryClient();
   const prevScoreRef = useRef<number>(0);
 
-  const { data: analysis } = useQuery({
-    queryKey: ["analysis"],
+  // Single API call for all dashboard data
+  const { data, isLoading } = useQuery({
+    queryKey: ["dashboard"],
     queryFn: async () => {
-      const res = await fetch("/api/analysis?endpoint=current");
+      const res = await fetch("/api/dashboard");
+      if (!res.ok) throw new Error("Dashboard fetch failed");
       return res.json();
     },
     refetchInterval: 5000,
-  });
-
-  const { data: signalData } = useQuery({
-    queryKey: ["signal"],
-    queryFn: async () => {
-      const res = await fetch("/api/signals?type=current");
-      return res.json() as Promise<Signal>;
-    },
-    refetchInterval: 5000,
-  });
-
-  const { data: positionData } = useQuery({
-    queryKey: ["position"],
-    queryFn: async () => {
-      const res = await fetch("/api/trading?type=position");
-      return res.json();
-    },
-    refetchInterval: 3000,
-  });
-
-  const { data: brokerData } = useQuery({
-    queryKey: ["broker"],
-    queryFn: async () => {
-      const res = await fetch("/api/broker?type=connection");
-      return res.json();
-    },
-  });
-
-  const { data: marketData } = useQuery({
-    queryKey: ["market"],
-    queryFn: async () => {
-      const [quote, session] = await Promise.all([
-        fetch("/api/market?type=quote&symbol=EURUSD").then((r) => r.json()),
-        fetch("/api/market?type=session").then((r) => r.json()),
-      ]);
-      return { quote, session };
-    },
-    refetchInterval: 3000,
-  });
-
-  const { data: candlesData } = useQuery({
-    queryKey: ["candles"],
-    queryFn: async () => {
-      const res = await fetch("/api/market?type=candles&symbol=EURUSD&timeframe=M5&count=100");
-      return res.json();
-    },
+    staleTime: 4000,
   });
 
   useEffect(() => {
@@ -77,35 +34,32 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
+    const signal = data?.signal as Signal | undefined;
     if (
-      signalData &&
-      signalData.trustScore >= 60 &&
-      signalData.trustScore !== prevScoreRef.current &&
-      signalData.direction !== "WAIT"
+      signal &&
+      signal.trustScore >= 60 &&
+      signal.trustScore !== prevScoreRef.current &&
+      signal.direction !== "WAIT"
     ) {
       playAlertSound();
-      prevScoreRef.current = signalData.trustScore;
+      prevScoreRef.current = signal.trustScore;
     }
-  }, [signalData]);
+  }, [data]);
 
   const placeOrderMutation = useMutation({
     mutationFn: async () => {
-      const idempotencyKey = uuidv4();
       const res = await fetch("/api/trading", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "place-order",
-          signal: signalData,
-          idempotencyKey,
+          signal: data?.signal,
+          idempotencyKey: uuidv4(),
         }),
       });
       return res.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["position"] });
-      queryClient.invalidateQueries({ queryKey: ["signal"] });
-    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
   });
 
   const emergencyStopMutation = useMutation({
@@ -117,26 +71,44 @@ export default function DashboardPage() {
       });
       return res.json();
     },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
   });
 
   const dismissMutation = useMutation({
     mutationFn: async () => {
       await fetch("/api/signals?action=dismiss", { method: "POST" });
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["signal"] });
-    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
   });
 
-  const quote = marketData?.quote;
-  const position = positionData?.position;
+  const quote = data?.quote;
+  const signal: Signal | null = data?.signal ?? null;
+  const position = data?.position;
+  const candles = data?.candles ?? [];
+  const timeframeAnalysis = data?.timeframeAnalysis ?? [];
+  const session = data?.session;
+
+  if (isLoading) {
+    return (
+      <AppShell>
+        <div className="flex h-64 items-center justify-center">
+          <div className="text-center">
+            <div className="mb-2 text-2xl">◉</div>
+            <p className="text-sm text-[#6b7a8f]">Loading market data...</p>
+          </div>
+        </div>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-xl font-bold">Dashboard</h1>
-          <p className="text-sm text-[#6b7a8f]">EURUSD · Paper Trading</p>
+          <p className="text-sm text-[#6b7a8f]">
+            {quote?.symbol ?? "EURUSD"} · Paper Trading
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <span className="badge-paper rounded-full px-3 py-1 text-xs font-medium">
@@ -145,9 +117,11 @@ export default function DashboardPage() {
           <span className="rounded-full border border-[#1e2836] px-3 py-1 text-xs text-[#6b7a8f]">
             Manual Confirmation
           </span>
-          <span className="rounded-full border border-[#1e2836] px-3 py-1 text-xs text-[#6b7a8f]">
-            {marketData?.session?.session?.replace("_", " ") ?? "—"}
-          </span>
+          {session && (
+            <span className="rounded-full border border-[#1e2836] px-3 py-1 text-xs text-[#6b7a8f]">
+              {String(session).replace(/_/g, " ")}
+            </span>
+          )}
         </div>
       </div>
 
@@ -160,12 +134,15 @@ export default function DashboardPage() {
           label="Spread"
           value={quote ? `${(quote.spread * 10000).toFixed(1)} pips` : "—"}
         />
-        <MetricCard label="Balance" value="$10,000" />
-        <MetricCard label="Equity" value="$10,000" />
         <MetricCard
-          label="Broker"
-          value={brokerData?.status === "connected" ? "Connected" : "Mock"}
+          label="Balance"
+          value={`$${(data?.broker?.balance ?? 10000).toLocaleString()}`}
         />
+        <MetricCard
+          label="Equity"
+          value={`$${(data?.broker?.equity ?? 10000).toLocaleString()}`}
+        />
+        <MetricCard label="Broker" value="Mock (Demo)" />
         <MetricCard
           label="Position"
           value={position ? `${position.direction} OPEN` : "None"}
@@ -174,26 +151,24 @@ export default function DashboardPage() {
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
-          {candlesData?.candles && (
-            <CandleChart candles={candlesData.candles} />
-          )}
+          {candles.length > 0 && <CandleChart candles={candles} />}
 
           <SignalCard
-            signal={signalData ?? null}
+            signal={signal}
             onPlaceOrder={() => placeOrderMutation.mutate()}
             onDismiss={() => dismissMutation.mutate()}
             loading={placeOrderMutation.isPending}
           />
 
           {placeOrderMutation.data && !placeOrderMutation.data.success && (
-            <div className="card border-[#ff475740] p-4">
+            <div className="card border border-[#ff475740] p-4">
               <p className="text-sm font-medium text-[#ff4757]">
                 ORDER NOT PLACED
               </p>
               <ul className="mt-2 space-y-1">
                 {placeOrderMutation.data.errors?.map((err: string) => (
                   <li key={err} className="text-xs text-[#ff4757]">
-                    {err}
+                    · {err}
                   </li>
                 ))}
               </ul>
@@ -201,7 +176,7 @@ export default function DashboardPage() {
           )}
 
           {placeOrderMutation.data?.success && (
-            <div className="card border-[#00d4aa40] p-4">
+            <div className="card border border-[#00d4aa40] p-4">
               <p className="text-sm font-medium text-[#00d4aa]">
                 Order placed successfully (paper)
               </p>
@@ -214,20 +189,24 @@ export default function DashboardPage() {
             onStop={(mode) => emergencyStopMutation.mutate(mode)}
           />
 
-          {analysis?.timeframeAnalysis && (
+          {timeframeAnalysis.length > 0 && (
             <div className="card p-4">
-              <h3 className="mb-3 text-sm font-medium">Multi-Timeframe Trend</h3>
+              <h3 className="mb-3 text-sm font-medium">
+                Multi-Timeframe Trend
+              </h3>
               <div className="space-y-2">
-                {analysis.timeframeAnalysis.map(
+                {timeframeAnalysis.map(
                   (tf: {
                     timeframe: string;
-                    indicators: { trend: string; rsi: number; adx: number };
+                    indicators: { trend: string; rsi: number };
                   }) => (
                     <div
                       key={tf.timeframe}
                       className="flex items-center justify-between text-sm"
                     >
-                      <span className="text-[#6b7a8f]">{tf.timeframe}</span>
+                      <span className="w-10 text-[#6b7a8f]">
+                        {tf.timeframe}
+                      </span>
                       <span
                         className={
                           tf.indicators.trend === "bullish"
@@ -240,7 +219,7 @@ export default function DashboardPage() {
                         {tf.indicators.trend}
                       </span>
                       <span className="text-xs text-[#6b7a8f]">
-                        RSI {tf.indicators.rsi?.toFixed(0)}
+                        RSI {tf.indicators.rsi?.toFixed(0) ?? "—"}
                       </span>
                     </div>
                   )
@@ -266,9 +245,9 @@ export default function DashboardPage() {
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ action: "close-position" }),
                   });
-                  queryClient.invalidateQueries({ queryKey: ["position"] });
+                  queryClient.invalidateQueries({ queryKey: ["dashboard"] });
                 }}
-                className="mt-3 w-full rounded-lg border border-[#ff475740] py-2 text-xs text-[#ff4757]"
+                className="mt-3 w-full rounded-lg border border-[#ff475740] py-2 text-xs text-[#ff4757] hover:bg-[#ff475710]"
               >
                 Close Trade
               </button>

@@ -5,28 +5,33 @@ import { computeIndicators } from "@/modules/technical-analysis";
 import { getTradingSettings } from "@/lib/settings-store";
 import type { Timeframe } from "@/types";
 
+const TIMEFRAMES: Timeframe[] = ["H1", "M15", "M5", "M1"];
+
 async function buildAnalysis(symbol: string) {
   const settings = getTradingSettings();
-  const quote = await getQuote(symbol);
-  const timeframes: Timeframe[] = ["H1", "M15", "M5", "M1"];
-  const candlesByTf: Record<Timeframe, Awaited<ReturnType<typeof getCandles>>> = {} as Record<
-    Timeframe,
-    Awaited<ReturnType<typeof getCandles>>
-  >;
 
-  for (const tf of timeframes) {
-    candlesByTf[tf] = await getCandles(symbol, tf, 200);
-  }
+  // Parallel fetching — all timeframes at once instead of sequential loop
+  const [quote, ...candleArrays] = await Promise.all([
+    getQuote(symbol),
+    ...TIMEFRAMES.map((tf) => getCandles(symbol, tf, 100)),
+  ]);
 
-  const signal = await analyzeMultiTimeframe(symbol, quote, candlesByTf, {
-    allowedSessions: settings.allowedSessions,
-    manualThreshold: settings.manualThreshold,
-    spreadLimit: settings.maximumSpread,
-  });
+  const candlesByTf = Object.fromEntries(
+    TIMEFRAMES.map((tf, i) => [tf, candleArrays[i]])
+  ) as Record<Timeframe, Awaited<ReturnType<typeof getCandles>>>;
 
-  const timeframeAnalysis = timeframes.map((tf) => ({
+  const [signal, ...indicatorSets] = await Promise.all([
+    analyzeMultiTimeframe(symbol, quote, candlesByTf, {
+      allowedSessions: settings.allowedSessions,
+      manualThreshold: settings.manualThreshold,
+      spreadLimit: settings.maximumSpread,
+    }),
+    ...TIMEFRAMES.map((tf) => computeIndicators(candlesByTf[tf])),
+  ]);
+
+  const timeframeAnalysis = TIMEFRAMES.map((tf, i) => ({
     timeframe: tf,
-    indicators: computeIndicators(candlesByTf[tf]),
+    indicators: indicatorSets[i],
     lastCandle: candlesByTf[tf][candlesByTf[tf].length - 1],
   }));
 
@@ -36,7 +41,8 @@ async function buildAnalysis(symbol: string) {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const endpoint = searchParams.get("endpoint") ?? "current";
-  const symbol = searchParams.get("symbol") ?? getTradingSettings().selectedSymbol;
+  const symbol =
+    searchParams.get("symbol") ?? getTradingSettings().selectedSymbol;
 
   if (endpoint === "current") {
     const analysis = await buildAnalysis(symbol);

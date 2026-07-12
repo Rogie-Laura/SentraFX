@@ -5,19 +5,25 @@ import { createSignalAlert } from "@/modules/notifications";
 import { getTradingSettings } from "@/lib/settings-store";
 import type { Timeframe } from "@/types";
 
+const TIMEFRAMES: Timeframe[] = ["H1", "M15", "M5", "M1"];
+
+let currentSignal: Awaited<ReturnType<typeof analyzeMultiTimeframe>> | null =
+  null;
 const signalHistory: Awaited<ReturnType<typeof analyzeMultiTimeframe>>[] = [];
-let currentSignal: Awaited<ReturnType<typeof analyzeMultiTimeframe>> | null = null;
 
 async function refreshSignal() {
   const settings = getTradingSettings();
   const symbol = settings.selectedSymbol;
-  const quote = await getQuote(symbol);
-  const timeframes: Timeframe[] = ["H1", "M15", "M5", "M1"];
-  const candlesByTf = {} as Record<Timeframe, Awaited<ReturnType<typeof getCandles>>>;
 
-  for (const tf of timeframes) {
-    candlesByTf[tf] = await getCandles(symbol, tf, 200);
-  }
+  // Parallel fetching
+  const [quote, ...candleArrays] = await Promise.all([
+    getQuote(symbol),
+    ...TIMEFRAMES.map((tf) => getCandles(symbol, tf, 100)),
+  ]);
+
+  const candlesByTf = Object.fromEntries(
+    TIMEFRAMES.map((tf, i) => [tf, candleArrays[i]])
+  ) as Record<Timeframe, Awaited<ReturnType<typeof getCandles>>>;
 
   const signal = await analyzeMultiTimeframe(symbol, quote, candlesByTf, {
     allowedSessions: settings.allowedSessions,
@@ -26,9 +32,13 @@ async function refreshSignal() {
   });
 
   currentSignal = signal;
-  if (signal.trustScore >= settings.manualThreshold && signal.direction !== "WAIT") {
+  if (
+    signal.trustScore >= settings.manualThreshold &&
+    signal.direction !== "WAIT"
+  ) {
     createSignalAlert(signal);
     signalHistory.unshift(signal);
+    if (signalHistory.length > 50) signalHistory.pop();
   }
 
   return signal;
@@ -52,13 +62,10 @@ export async function GET(request: Request) {
   return NextResponse.json({ error: "Invalid type" }, { status: 400 });
 }
 
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ id?: string }> }
-) {
+export async function POST(request: Request) {
   const { searchParams } = new URL(request.url);
   const action = searchParams.get("action");
-  await params;
+  await request.text();
 
   if (action === "dismiss") {
     currentSignal = null;
