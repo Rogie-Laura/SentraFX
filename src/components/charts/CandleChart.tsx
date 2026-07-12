@@ -5,6 +5,7 @@ import {
   createChart,
   CandlestickSeries,
   type IChartApi,
+  type ISeriesApi,
   ColorType,
   type UTCTimestamp,
 } from "lightweight-charts";
@@ -23,13 +24,11 @@ interface CandleChartProps {
 export function CandleChart({ candles, height = 320 }: CandleChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
 
+  // Create the chart exactly once on mount — never recreated on data refetch
   useEffect(() => {
-    if (!containerRef.current || candles.length === 0) return;
-
-    if (chartRef.current) {
-      chartRef.current.remove();
-    }
+    if (!containerRef.current) return;
 
     const chart = createChart(containerRef.current, {
       height,
@@ -54,18 +53,8 @@ export function CandleChart({ candles, height = 320 }: CandleChartProps) {
       wickDownColor: "#ff4757",
     });
 
-    series.setData(
-      candles.map((c) => ({
-        time: Math.floor(new Date(c.openTime).getTime() / 1000) as UTCTimestamp,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-      }))
-    );
-
-    chart.timeScale().fitContent();
     chartRef.current = chart;
+    seriesRef.current = series;
 
     const handleResize = () => {
       if (containerRef.current) {
@@ -77,9 +66,36 @@ export function CandleChart({ candles, height = 320 }: CandleChartProps) {
 
     return () => {
       window.removeEventListener("resize", handleResize);
+      chartRef.current = null;
+      seriesRef.current = null;
       chart.remove();
     };
-  }, [candles, height]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Update size only if it changes
+  useEffect(() => {
+    chartRef.current?.applyOptions({ height });
+  }, [height]);
+
+  // Feed new candle data into the existing series without recreating the chart
+  useEffect(() => {
+    if (!seriesRef.current || candles.length === 0) return;
+
+    seriesRef.current.setData(
+      candles.map((c) => ({
+        time: Math.floor(
+          new Date(c.openTime).getTime() / 1000
+        ) as UTCTimestamp,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+      }))
+    );
+
+    chartRef.current?.timeScale().fitContent();
+  }, [candles]);
 
   return (
     <div className="card overflow-hidden">
